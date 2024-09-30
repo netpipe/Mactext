@@ -17,6 +17,13 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
+#include <QTabWidget>
+#include <QHBoxLayout>
+#include <QFileInfo>
+
+// Forward declarations
+class CodeEditor;
+class FindReplaceDialog;
 
 // Custom editor with line numbers and syntax highlighting
 class LineNumberArea;
@@ -130,8 +137,8 @@ void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 
     QTextBlock block = firstVisibleBlock();
     int blockNumber = block.blockNumber();
-    int top = (int) blockBoundingGeometry(block).translated(contentOffset()).top();
-    int bottom = top + (int) blockBoundingRect(block).height();
+    int top = static_cast<int>(blockBoundingGeometry(block).translated(contentOffset()).top());
+    int bottom = top + static_cast<int>(blockBoundingRect(block).height());
 
     while (block.isValid() && top <= event->rect().bottom()) {
         if (block.isVisible() && bottom >= event->rect().top()) {
@@ -143,7 +150,7 @@ void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent *event) {
 
         block = block.next();
         top = bottom;
-        bottom = top + (int) blockBoundingRect(block).height();
+        bottom = top + static_cast<int>(blockBoundingRect(block).height());
         ++blockNumber;
     }
 }
@@ -155,7 +162,8 @@ public:
 
 protected:
     void highlightBlock(const QString &text) override {
-        QRegularExpression keywordPattern("\\b(if|else|for|while|int|double|QString)\\b");
+        // Simple keyword highlighting for demonstration
+        QRegularExpression keywordPattern("\\b(if|else|for|while|int|double|QString|return|void|class|public|private|protected)\\b");
         QTextCharFormat keywordFormat;
         keywordFormat.setForeground(Qt::blue);
         keywordFormat.setFontWeight(QFont::Bold);
@@ -164,6 +172,26 @@ protected:
         while (i.hasNext()) {
             QRegularExpressionMatch match = i.next();
             setFormat(match.capturedStart(), match.capturedLength(), keywordFormat);
+        }
+
+        // String literals
+        QRegularExpression stringPattern("\".*?\"");
+        QTextCharFormat stringFormat;
+        stringFormat.setForeground(Qt::darkGreen);
+        QRegularExpressionMatchIterator j = stringPattern.globalMatch(text);
+        while (j.hasNext()) {
+            QRegularExpressionMatch match = j.next();
+            setFormat(match.capturedStart(), match.capturedLength(), stringFormat);
+        }
+
+        // Comments
+        QRegularExpression commentPattern("//[^\n]*");
+        QTextCharFormat commentFormat;
+        commentFormat.setForeground(Qt::gray);
+        QRegularExpressionMatchIterator k = commentPattern.globalMatch(text);
+        while (k.hasNext()) {
+            QRegularExpressionMatch match = k.next();
+            setFormat(match.capturedStart(), match.capturedLength(), commentFormat);
         }
     }
 };
@@ -178,38 +206,58 @@ public:
 signals:
     void findText(const QString &text);
     void replaceText(const QString &text, const QString &replacement);
+    void replaceAllText(const QString &text, const QString &replacement);
 
 private slots:
     void find();
     void replace();
+    void replaceAll();
 
 private:
     QLineEdit *findLineEdit;
     QLineEdit *replaceLineEdit;
+    QPushButton *findButton;
+    QPushButton *replaceButton;
+    QPushButton *replaceAllButton;
 };
 
 FindReplaceDialog::FindReplaceDialog(QWidget *parent) : QDialog(parent) {
     setWindowTitle("Find and Replace");
-    QVBoxLayout *layout = new QVBoxLayout(this);
+    setModal(false);
+    setFixedSize(400, 200);
 
+    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+
+    // Find Section
+    QHBoxLayout *findLayout = new QHBoxLayout();
     QLabel *findLabel = new QLabel("Find:", this);
     findLineEdit = new QLineEdit(this);
+    findLayout->addWidget(findLabel);
+    findLayout->addWidget(findLineEdit);
+    mainLayout->addLayout(findLayout);
 
+    // Replace Section
+    QHBoxLayout *replaceLayout = new QHBoxLayout();
     QLabel *replaceLabel = new QLabel("Replace:", this);
     replaceLineEdit = new QLineEdit(this);
+    replaceLayout->addWidget(replaceLabel);
+    replaceLayout->addWidget(replaceLineEdit);
+    mainLayout->addLayout(replaceLayout);
 
-    QPushButton *findButton = new QPushButton("Find", this);
-    QPushButton *replaceButton = new QPushButton("Replace", this);
+    // Buttons
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    findButton = new QPushButton("Find", this);
+    replaceButton = new QPushButton("Replace", this);
+    replaceAllButton = new QPushButton("Replace All", this);
+    buttonLayout->addWidget(findButton);
+    buttonLayout->addWidget(replaceButton);
+    buttonLayout->addWidget(replaceAllButton);
+    mainLayout->addLayout(buttonLayout);
 
-    layout->addWidget(findLabel);
-    layout->addWidget(findLineEdit);
-    layout->addWidget(replaceLabel);
-    layout->addWidget(replaceLineEdit);
-    layout->addWidget(findButton);
-    layout->addWidget(replaceButton);
-
+    // Connect buttons
     connect(findButton, &QPushButton::clicked, this, &FindReplaceDialog::find);
     connect(replaceButton, &QPushButton::clicked, this, &FindReplaceDialog::replace);
+    connect(replaceAllButton, &QPushButton::clicked, this, &FindReplaceDialog::replaceAll);
 }
 
 void FindReplaceDialog::find() {
@@ -220,6 +268,10 @@ void FindReplaceDialog::replace() {
     emit replaceText(findLineEdit->text(), replaceLineEdit->text());
 }
 
+void FindReplaceDialog::replaceAll() {
+    emit replaceAllText(findLineEdit->text(), replaceLineEdit->text());
+}
+
 // Main Editor Window with menu-based actions and QFileOpenEvent handling
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -227,6 +279,7 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(QWidget *parent = nullptr);
     void openFileFromEvent(const QString &fileName);
+    void newDocument();
 
 protected:
     bool event(QEvent *event) override;
@@ -238,26 +291,47 @@ private slots:
     void showFindReplaceDialog();
     void findText(const QString &text);
     void replaceText(const QString &text, const QString &replacement);
+    void replaceAllText(const QString &text, const QString &replacement);
+    void closeTab(int index);
 
 private:
-    CodeEditor *editor;
-    QString currentFile;
+    QTabWidget *tabWidget;
     FindReplaceDialog *findReplaceDialog;
 
-    bool saveToFile(const QString &fileName);
+    CodeEditor* currentEditor();
+
+    bool saveToFile(CodeEditor *editor, const QString &fileName);
+    bool saveCurrentFile();
 };
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-    editor = new CodeEditor(this);
-    setCentralWidget(editor);
-    new SyntaxHighlighter(editor->document());
+    setWindowTitle("Advanced Qt Text Editor");
+    resize(800, 600);
+
+    // Initialize Tab Widget
+    tabWidget = new QTabWidget(this);
+    tabWidget->setTabsClosable(true);
+    setCentralWidget(tabWidget);
+
+    // Handle tab close requests
+    connect(tabWidget, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
 
     // Create actions
+    QAction *newAction = new QAction("New", this);
     QAction *openAction = new QAction("Open", this);
     QAction *saveAction = new QAction("Save", this);
     QAction *saveAsAction = new QAction("Save As", this);
     QAction *findReplaceAction = new QAction("Find and Replace", this);
 
+    // Set shortcuts
+    newAction->setShortcut(QKeySequence::New);
+    openAction->setShortcut(QKeySequence::Open);
+    saveAction->setShortcut(QKeySequence::Save);
+    saveAsAction->setShortcut(QKeySequence::SaveAs);
+    findReplaceAction->setShortcut(QKeySequence::Find);
+
+    // Connect actions
+    connect(newAction, &QAction::triggered, this, &MainWindow::newDocument);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFile);
     connect(saveAction, &QAction::triggered, this, &MainWindow::saveFile);
     connect(saveAsAction, &QAction::triggered, this, &MainWindow::saveFileAs);
@@ -265,6 +339,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     // Create menu
     QMenu *fileMenu = menuBar()->addMenu("File");
+    fileMenu->addAction(newAction);
     fileMenu->addAction(openAction);
     fileMenu->addAction(saveAction);
     fileMenu->addAction(saveAsAction);
@@ -272,14 +347,37 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     QMenu *editMenu = menuBar()->addMenu("Edit");
     editMenu->addAction(findReplaceAction);
 
-    // Find/Replace dialog
+    // Initialize Find/Replace Dialog
     findReplaceDialog = new FindReplaceDialog(this);
     connect(findReplaceDialog, &FindReplaceDialog::findText, this, &MainWindow::findText);
     connect(findReplaceDialog, &FindReplaceDialog::replaceText, this, &MainWindow::replaceText);
+    connect(findReplaceDialog, &FindReplaceDialog::replaceAllText, this, &MainWindow::replaceAllText);
+
+    // Create an initial blank document
+    newDocument();
+}
+
+CodeEditor* MainWindow::currentEditor() {
+    return qobject_cast<CodeEditor*>(tabWidget->currentWidget());
+}
+
+void MainWindow::newDocument() {
+    // Create a new CodeEditor
+    CodeEditor *editor = new CodeEditor(this);
+    new SyntaxHighlighter(editor->document());
+
+    // Add to tab widget
+    QString displayName = "Untitled";
+    tabWidget->addTab(editor, displayName);
+    tabWidget->setCurrentWidget(editor);
+
+    // No file path yet
+    editor->setProperty("filePath", QString());
 }
 
 void MainWindow::openFile() {
-    QString fileName = QFileDialog::getOpenFileName(this, "Open File", "", "Text Files (*.txt);;All Files (*)");
+    QString fileName = QFileDialog::getOpenFileName(this, "Open File", "",
+                                                    "Text Files (*.txt *.cpp *.h *.py *.md);;All Files (*)");
     if (!fileName.isEmpty()) {
         openFileFromEvent(fileName);
     }
@@ -289,36 +387,43 @@ void MainWindow::openFileFromEvent(const QString &fileName) {
     QFile file(fileName);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
-        editor->setPlainText(in.readAll());
+        QString content = in.readAll();
         file.close();
-        currentFile = fileName;
+
+        // Create a new CodeEditor
+        CodeEditor *editor = new CodeEditor(this);
+        editor->setPlainText(content);
+        new SyntaxHighlighter(editor->document());
+
+        // Add to tab widget
+        QString displayName = QFileInfo(fileName).fileName();
+        tabWidget->addTab(editor, displayName);
+        tabWidget->setCurrentWidget(editor);
+
+        // Store the file path as property
+        editor->setProperty("filePath", fileName);
     } else {
         QMessageBox::warning(this, "Error", "Could not open file");
     }
 }
 
-void MainWindow::saveFile() {
-    if (currentFile.isEmpty()) {
-        saveFileAs();
-    } else {
-        saveToFile(currentFile);
-    }
-}
-
-void MainWindow::saveFileAs() {
-    QString fileName = QFileDialog::getSaveFileName(this, "Save File As", "", "Text Files (*.txt);;All Files (*)");
-    if (!fileName.isEmpty()) {
-        saveToFile(fileName);
-    }
-}
-
-bool MainWindow::saveToFile(const QString &fileName) {
+bool MainWindow::saveToFile(CodeEditor *editor, const QString &fileName) {
     QFile file(fileName);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
         out << editor->toPlainText();
         file.close();
-        currentFile = fileName;
+
+        // Update tab title
+        QString displayName = QFileInfo(fileName).fileName();
+        int index = tabWidget->indexOf(editor);
+        if (index != -1) {
+            tabWidget->setTabText(index, displayName);
+        }
+
+        // Update the filePath property
+        editor->setProperty("filePath", fileName);
+        editor->document()->setModified(false); // Reset modified flag
         return true;
     } else {
         QMessageBox::warning(this, "Error", "Could not save file");
@@ -326,58 +431,185 @@ bool MainWindow::saveToFile(const QString &fileName) {
     }
 }
 
+bool MainWindow::saveCurrentFile() {
+    CodeEditor *editor = currentEditor();
+    if (!editor)
+        return false;
+
+    QString fileName = editor->property("filePath").toString();
+    if (fileName.isEmpty()) {
+        return false;
+    }
+
+    return saveToFile(editor, fileName);
+}
+
+void MainWindow::saveFile() {
+    CodeEditor *editor = currentEditor();
+    if (!editor)
+        return;
+
+    QString fileName = editor->property("filePath").toString();
+    if (fileName.isEmpty()) {
+        saveFileAs();
+    } else {
+        saveToFile(editor, fileName);
+    }
+}
+
+void MainWindow::saveFileAs() {
+    CodeEditor *editor = currentEditor();
+    if (!editor)
+        return;
+
+    QString fileName = QFileDialog::getSaveFileName(this, "Save File As", "",
+                                                    "Text Files (*.txt *.cpp *.h *.py *.md);;All Files (*)");
+    if (!fileName.isEmpty()) {
+        saveToFile(editor, fileName);
+    }
+}
+
 void MainWindow::showFindReplaceDialog() {
     findReplaceDialog->show();
+    findReplaceDialog->raise();
+    findReplaceDialog->activateWindow();
 }
 
 void MainWindow::findText(const QString &text) {
-    if (!text.isEmpty()) {
-        editor->find(text);
+    if (text.isEmpty())
+        return;
+
+    CodeEditor *editor = currentEditor();
+    if (!editor)
+        return;
+
+    QTextCursor cursor = editor->textCursor();
+    bool found = editor->find(text);
+    if (!found) {
+        QMessageBox::information(this, "Find", QString("'%1' not found.").arg(text));
     }
 }
 
 void MainWindow::replaceText(const QString &text, const QString &replacement) {
-    if (!text.isEmpty()) {
-        editor->setPlainText(editor->toPlainText().replace(text, replacement));
+    if (text.isEmpty())
+        return;
+
+    CodeEditor *editor = currentEditor();
+    if (!editor)
+        return;
+
+    QTextCursor cursor = editor->textCursor();
+    if (cursor.hasSelection() && cursor.selectedText() == text) {
+        cursor.insertText(replacement);
+    }
+    // Find next occurrence
+    findText(text);
+}
+
+void MainWindow::replaceAllText(const QString &text, const QString &replacement) {
+    if (text.isEmpty())
+        return;
+
+    CodeEditor *editor = currentEditor();
+    if (!editor)
+        return;
+
+    QString content = editor->toPlainText();
+    int occurrences = content.count(text);
+    if (occurrences == 0) {
+        QMessageBox::information(this, "Replace All", QString("No occurrences of '%1' found.").arg(text));
+        return;
+    }
+
+    content.replace(text, replacement);
+    editor->setPlainText(content);
+    QMessageBox::information(this, "Replace All", QString("Replaced %1 occurrences of '%2' with '%3'.")
+                             .arg(occurrences).arg(text).arg(replacement));
+}
+
+void MainWindow::closeTab(int index) {
+    QWidget *widget = tabWidget->widget(index);
+    CodeEditor *editor = qobject_cast<CodeEditor*>(widget);
+    if (editor) {
+        // Check if the document is modified
+        if (editor->document()->isModified()) {
+            QString fileName = editor->property("filePath").toString();
+            QString displayName = fileName.isEmpty() ? "Untitled" : QFileInfo(fileName).fileName();
+            QMessageBox::StandardButton reply;
+            reply = QMessageBox::question(this, "Save Changes",
+                                          QString("Do you want to save changes to '%1'?").arg(displayName),
+                                          QMessageBox::Yes|QMessageBox::No|QMessageBox::Cancel);
+            if (reply == QMessageBox::Yes) {
+                if (!saveToFile(editor, fileName.isEmpty() ? QFileDialog::getSaveFileName(this, "Save File As", "",
+                                                                                           "Text Files (*.txt *.cpp *.h *.py *.md);;All Files (*)")
+                                         : fileName)) {
+                    // If saving fails, don't close the tab
+                    return;
+                }
+            } else if (reply == QMessageBox::Cancel) {
+                return;
+            }
+        }
+
+        tabWidget->removeTab(index);
+        editor->deleteLater();
     }
 }
 
 bool MainWindow::event(QEvent *event) {
+    // Handle QFileOpenEvent when the application is triggered from Finder
     if (event->type() == QEvent::FileOpen) {
         QFileOpenEvent *openEvent = static_cast<QFileOpenEvent *>(event);
-        openFileFromEvent(openEvent->file());
-        return true;
+        QString filePath = openEvent->file();
+        if (!filePath.isEmpty()) { // Corrected from isValid() to isEmpty()
+            openFileFromEvent(filePath);
+            return true;
+        }
     }
     return QMainWindow::event(event);
 }
 
-// Main Application
+// Custom QApplication to handle QFileOpenEvent globally
 class TextEditorApp : public QApplication {
+    Q_OBJECT
+
 public:
-    TextEditorApp(int &argc, char **argv) : QApplication(argc, argv) {}
+    TextEditorApp(int &argc, char **argv) : QApplication(argc, argv), mainWindow(nullptr) {}
+
+    void setMainWindow(MainWindow *window) {
+        mainWindow = window;
+    }
 
 protected:
     bool event(QEvent *event) override {
         if (event->type() == QEvent::FileOpen) {
             QFileOpenEvent *fileOpenEvent = static_cast<QFileOpenEvent *>(event);
-            if (mainWindow) {
-                mainWindow->openFileFromEvent(fileOpenEvent->file());
+            QString filePath = fileOpenEvent->file();
+            if (!filePath.isEmpty() && mainWindow) { // Corrected from isValid() to isEmpty()
+                mainWindow->openFileFromEvent(filePath);
+                return true;
             }
-            return true;
         }
         return QApplication::event(event);
     }
 
-public:
+private:
     MainWindow *mainWindow;
 };
 
+// Main function
 int main(int argc, char *argv[]) {
     TextEditorApp app(argc, argv);
     MainWindow mainWindow;
-    app.mainWindow = &mainWindow;
-    mainWindow.resize(800, 600);
+    app.setMainWindow(&mainWindow);
     mainWindow.show();
+
+    // If files are passed as command-line arguments, open them
+    QStringList args = app.arguments();
+    for (int i = 1; i < args.size(); ++i) { // Skip the first argument (application path)
+        mainWindow.openFileFromEvent(args.at(i));
+    }
+
     return app.exec();
 }
 
