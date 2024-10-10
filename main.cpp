@@ -20,7 +20,11 @@
 #include <QTabWidget>
 #include <QHBoxLayout>
 #include <QFileInfo>
+#include <QCloseEvent>
+#include <QDebug>
+#include <QTimer>
 
+bool btrue=1;
 // Forward declarations
 class CodeEditor;
 class FindReplaceDialog;
@@ -163,7 +167,7 @@ public:
 protected:
     void highlightBlock(const QString &text) override {
         // Simple keyword highlighting for demonstration
-        QRegularExpression keywordPattern("\\b(if|else|for|while|int|double|QString|return|void|class|public|private|protected)\\b");
+        QRegularExpression keywordPattern("\\b(if|else|for|while|int|double|QString|return|void|class|public|private|protected|include)\\b");
         QTextCharFormat keywordFormat;
         keywordFormat.setForeground(Qt::blue);
         keywordFormat.setFontWeight(QFont::Bold);
@@ -283,6 +287,7 @@ public:
 
 protected:
     bool event(QEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
 
 private slots:
     void openFile();
@@ -293,7 +298,7 @@ private slots:
     void replaceText(const QString &text, const QString &replacement);
     void replaceAllText(const QString &text, const QString &replacement);
     void closeTab(int index);
-
+    void doLater();
 private:
     QTabWidget *tabWidget;
     FindReplaceDialog *findReplaceDialog;
@@ -302,6 +307,7 @@ private:
 
     bool saveToFile(CodeEditor *editor, const QString &fileName);
     bool saveCurrentFile();
+    bool promptSave(CodeEditor *editor);
 };
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
@@ -353,12 +359,20 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(findReplaceDialog, &FindReplaceDialog::replaceText, this, &MainWindow::replaceText);
     connect(findReplaceDialog, &FindReplaceDialog::replaceAllText, this, &MainWindow::replaceAllText);
 
+    QTimer::singleShot(100, this, SLOT(doLater()));
+
+
+
     // Create an initial blank document
-    newDocument();
+    //newDocument();
 }
 
 CodeEditor* MainWindow::currentEditor() {
     return qobject_cast<CodeEditor*>(tabWidget->currentWidget());
+}
+
+void MainWindow::doLater() {
+    if (btrue) {newDocument();}
 }
 
 void MainWindow::newDocument() {
@@ -390,6 +404,15 @@ void MainWindow::openFileFromEvent(const QString &fileName) {
         QString content = in.readAll();
         file.close();
 
+        // Check if file is already open
+        for (int i = 0; i < tabWidget->count(); ++i) {
+            CodeEditor *editor = qobject_cast<CodeEditor*>(tabWidget->widget(i));
+            if (editor && editor->property("filePath").toString() == fileName) {
+                tabWidget->setCurrentIndex(i);
+                return;
+            }
+        }
+
         // Create a new CodeEditor
         CodeEditor *editor = new CodeEditor(this);
         editor->setPlainText(content);
@@ -402,12 +425,18 @@ void MainWindow::openFileFromEvent(const QString &fileName) {
 
         // Store the file path as property
         editor->setProperty("filePath", fileName);
+        editor->document()->setModified(false); // Reset modified flag
+        btrue=false;
     } else {
         QMessageBox::warning(this, "Error", "Could not open file");
     }
 }
 
 bool MainWindow::saveToFile(CodeEditor *editor, const QString &fileName) {
+    if (fileName.isEmpty()) {
+        return false;
+    }
+
     QFile file(fileName);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
@@ -527,30 +556,41 @@ void MainWindow::replaceAllText(const QString &text, const QString &replacement)
                              .arg(occurrences).arg(text).arg(replacement));
 }
 
+bool MainWindow::promptSave(CodeEditor *editor) {
+    if (!editor->document()->isModified())
+        return true;
+
+    QString fileName = editor->property("filePath").toString();
+    QString displayName = fileName.isEmpty() ? "Untitled" : QFileInfo(fileName).fileName();
+    QMessageBox::StandardButton reply;
+    reply = QMessageBox::question(this, "Save Changes",
+                                  QString("Do you want to save changes to '%1'?").arg(displayName),
+                                  QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+    if (reply == QMessageBox::Yes) {
+        if (fileName.isEmpty()) {
+            QString newFileName = QFileDialog::getSaveFileName(this, "Save File As", "",
+                                                                "Text Files (*.txt *.cpp *.h *.py *.md);;All Files (*)");
+            if (newFileName.isEmpty()) {
+                return false; // User canceled save as
+            }
+            return saveToFile(editor, newFileName);
+        } else {
+            return saveToFile(editor, fileName);
+        }
+    } else if (reply == QMessageBox::No) {
+        return true;
+    } else { // Cancel
+        return false;
+    }
+}
+
 void MainWindow::closeTab(int index) {
     QWidget *widget = tabWidget->widget(index);
     CodeEditor *editor = qobject_cast<CodeEditor*>(widget);
     if (editor) {
-        // Check if the document is modified
-        if (editor->document()->isModified()) {
-            QString fileName = editor->property("filePath").toString();
-            QString displayName = fileName.isEmpty() ? "Untitled" : QFileInfo(fileName).fileName();
-            QMessageBox::StandardButton reply;
-            reply = QMessageBox::question(this, "Save Changes",
-                                          QString("Do you want to save changes to '%1'?").arg(displayName),
-                                          QMessageBox::Yes|QMessageBox::No|QMessageBox::Cancel);
-            if (reply == QMessageBox::Yes) {
-                if (!saveToFile(editor, fileName.isEmpty() ? QFileDialog::getSaveFileName(this, "Save File As", "",
-                                                                                           "Text Files (*.txt *.cpp *.h *.py *.md);;All Files (*)")
-                                         : fileName)) {
-                    // If saving fails, don't close the tab
-                    return;
-                }
-            } else if (reply == QMessageBox::Cancel) {
-                return;
-            }
+        if (!promptSave(editor)) {
+            return; // User canceled the close
         }
-
         tabWidget->removeTab(index);
         editor->deleteLater();
     }
@@ -569,6 +609,21 @@ bool MainWindow::event(QEvent *event) {
     return QMainWindow::event(event);
 }
 
+void MainWindow::closeEvent(QCloseEvent *event) {
+    // Iterate through all tabs and prompt to save if necessary
+    for (int i = 0; i < tabWidget->count(); ++i) {
+        CodeEditor *editor = qobject_cast<CodeEditor*>(tabWidget->widget(i));
+        if (editor) {
+            tabWidget->setCurrentIndex(i);
+            if (!promptSave(editor)) {
+                event->ignore();
+                return; // User canceled the close
+            }
+        }
+    }
+    event->accept();
+}
+
 // Custom QApplication to handle QFileOpenEvent globally
 class TextEditorApp : public QApplication {
     Q_OBJECT
@@ -582,6 +637,11 @@ public:
 
 protected:
     bool event(QEvent *event) override {
+//        if (event->type() == QEvent::Polish)
+//        {
+//            if (btrue) { mainWindow->newDocument();}
+//        return true;
+//        }
         if (event->type() == QEvent::FileOpen) {
             QFileOpenEvent *fileOpenEvent = static_cast<QFileOpenEvent *>(event);
             QString filePath = fileOpenEvent->file();
@@ -590,6 +650,7 @@ protected:
                 return true;
             }
         }
+
         return QApplication::event(event);
     }
 
@@ -602,13 +663,19 @@ int main(int argc, char *argv[]) {
     TextEditorApp app(argc, argv);
     MainWindow mainWindow;
     app.setMainWindow(&mainWindow);
-    mainWindow.show();
+
 
     // If files are passed as command-line arguments, open them
     QStringList args = app.arguments();
-    for (int i = 1; i < args.size(); ++i) { // Skip the first argument (application path)
-        mainWindow.openFileFromEvent(args.at(i));
-    }
+qDebug() << args.size() ;
+
+//if (args.size() >= 2) {
+            for (int i = 1; i < args.size(); ++i) { // Skip the first argument (application path)
+                mainWindow.openFileFromEvent(args.at(i));
+            }
+
+    //    }
+    mainWindow.show();
 
     return app.exec();
 }
