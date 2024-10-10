@@ -416,6 +416,9 @@ void MainWindow::openFileFromEvent(const QString &fileName) {
         // Create a new CodeEditor
         CodeEditor *editor = new CodeEditor(this);
         editor->setPlainText(content);
+        QFont emojiFont("Apple Color Emoji");
+        emojiFont.setPointSize(12);  // Adjust the size as needed
+        editor->setFont(emojiFont);
         new SyntaxHighlighter(editor->document());
 
         // Add to tab widget
